@@ -1,0 +1,95 @@
+[build-system]
+build-backend = 'setuptools.build_meta'
+requires = ['setuptools>=61.2']
+
+[project]
+name = 'torch-dnn'
+description = 'Deep learning for nuclear segmentation'
+readme = 'README.md'
+requires-python = '>=3.10'
+dynamic = ['version']
+keywords = [
+    'cell segmentation',
+    'single-cell imaging',
+    'multiplexed',
+    'deep learning',
+    'torch',
+    'pytorch',
+]
+classifiers = [
+    'Development Status :: 4 - Beta',
+    'Intended Audience :: Developers',
+    'Intended Audience :: Science/Research',
+    'License :: Modified Apache Version 2',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+    'Programming Language :: Python :: 3.13',
+    'Programming Language :: Python :: 3 :: Only',
+    'Topic :: Software Development :: Libraries :: Python Modules',
+    'Topic :: Scientific/Engineering :: Single-cell Imaging',
+    'Topic :: Scientific/Engineering :: Microscopy',
+    'Topic :: Scientific/Engineering :: Deep Learning',
+    'Topic :: Scientific/Engineering :: Bio-Informatics',
+    'Topic :: Scientific/Engineering :: Image Analysis',
+]
+dependencies = [
+    "ipython",
+    "matplotlib",
+    "opencv-python-headless",
+    "scikit-image",
+    "scipy",
+    "torch",
+    "torchvision",
+    "tqdm",
+]
+
+[[project.authors]]
+name = 'Van Valen Lab'
+email = 'vanvalenlab@gmail.com'
+
+[[project.maintainers]]
+name = 'Van Valen Lab'
+email = 'vanvalenlab@gmail.com'
+
+[project.urls]
+# Homepage = 
+"Bug Tracker" = 'https://github.com/vanvalenlab/torch-dnn/issues'
+# Documentation =
+"Source Code" = 'https://github.com/vanvalenlab/torch-dnn'
+
+[project.optional-dependencies]
+eval = [
+    "deepcell-toolbox"
+]
+test = [
+    "pytest"
+]
+
+[tool.setuptools]
+zip-safe = false
+include-package-data = false
+packages = [
+    "torch_dnn"
+]
+platforms = [
+    'Linux',
+    'Mac OSX',
+    'Windows',
+    'Unix',
+]
+
+[tool.setuptools.dynamic.version]
+attr = 'torch_dnn.__version__'
+
+# [tool.setuptools.package-data]
+# torch_dnn = ['tests/*.py']
+
+[tool.ruff]
+line-length = 110
+target-version="py310"
+
+[tool.ruff.lint]
+exclude = ["*.ipynb"]
+select = ["E", "F", "UP"]

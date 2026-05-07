@@ -1,0 +1,7 @@
+.venv/
+notebooks/
+data/
+_auth.py
+*.csv
+*.ipynb
+*/__pycache__/**

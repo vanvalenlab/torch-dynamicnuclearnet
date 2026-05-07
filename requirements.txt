@@ -1,0 +1,14 @@
+numpy
+pandas
+scipy
+scikit-image
+torch
+torchvision
+tqdm
+zarr
+matplotlib
+seaborn
+networkx
+tensorboard
+opencv-python
+click

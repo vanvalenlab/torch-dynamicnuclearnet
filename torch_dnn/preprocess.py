@@ -1,0 +1,82 @@
+from pathlib import Path
+import os
+import zarr
+import glob
+import numpy as np
+import pandas as pd
+
+def convert_to_zarr(filename, out_dir=None):
+
+    # there are four very poorly segmented images in the beginnign of the test split
+    # remove those
+
+    if out_dir is None:
+        file_dir = os.path.dirname(filename)
+        split = os.path.splitext(os.path.basename(filename))[0]
+
+    print(f"    Loading {split}.")
+    data = np.load(os.path.join(filename), allow_pickle=True)
+    X = data['X']
+    y = data['y']
+    
+    ## header is repeated 3 additional times in test split 
+    #throwing off cropping X and y
+
+    # Make it channels first like PyTorch is expecting
+    X = np.moveaxis(X, -1, 1)
+    y = np.moveaxis(y, -1, 1)
+    
+    y = np.flip(y, axis=1) # correct channels once and only once for Y
+
+    X = X[:].astype(np.float32)
+    y = y[:].astype(np.float32)
+
+    B, C, H, W = X.shape
+
+    # Create a Zarr store
+    store = zarr.open(f"{file_dir}/{split}.zarr", mode="w")
+
+    print(f"    Writing {split}.")
+
+    # Store 'X' — chunked across C, H, W (one sample per chunk)
+    store.create_dataset(
+        "X",
+        data=X,
+        chunks=(1, C, H, W),  # chunk = one full image (all channels, full spatial dims)
+        dtype=X.dtype,
+    )
+
+    # Store 'y' — chunked across C, H, W (one sample per chunk)
+    store.create_dataset(
+        "y",
+        data=y,
+        chunks=(1, C, H, W),
+        dtype=y.dtype,
+    )
+
+    meta_dtype = np.dtype(
+    [("filename", "U128"), ("experiment", "U128"), ("pixel_size", float), ("specimen", "U128")]
+    )
+
+    meta_ary = np.zeros(len(data["meta"])-1, dtype=meta_dtype)
+    meta_ary["filename"][:] = data["meta"][1:, 0]
+    meta_ary["experiment"] = data["meta"][1:, 1]
+    meta_ary["pixel_size"] = data["meta"][1:, 2]
+    meta_ary["specimen"] = data["meta"][1:, -1]
+
+    # Store 'metadata' — no spatial chunking needed, one scalar per sample
+    store.create_dataset(
+        "meta",
+        data=meta_ary,
+    )
+
+if __name__ == "__main__":
+
+    data_directory = Path.home() / ".deepcell/dnn/*.npz"
+
+    if not (fnames := list(glob.glob(str(data_directory)))):
+        raise ValueError("Tissuenet data not found at {data_directory}")
+
+    for filename in fnames:
+        print(f"Converting {os.path.basename(filename)}")
+        convert_to_zarr(filename)
