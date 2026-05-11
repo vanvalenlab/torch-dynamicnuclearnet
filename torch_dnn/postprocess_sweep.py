@@ -6,8 +6,6 @@ import random
 from torch_dnn.dnn import DNN
 from torch_dnn.metrics import Metrics
 
-from skimage.color import label2rgb
-from skimage.exposure import rescale_intensity
 from scipy.stats import hmean
 from tqdm import tqdm
 from pathlib import Path
@@ -101,11 +99,8 @@ def main():
     # Whole cell, nuc
 
     sweep_classical = {
-        'interior_threshold': [0.05, 0.075],
-        'interior_smooth': [0, 1],
-        'pixel_expansion': [0, 1],
-        'maxima_threshold': [0.075, 0.1],
-        'maxima_smooth': [0, 1],
+        'maxima_smooth': [0.5, 1, 2],
+        'interior_threshold': [0.01, 0.05]
     }
 
     default_kwargs = {
@@ -113,9 +108,10 @@ def main():
             'fill_holes_threshold': 15,
             'maxima_threshold': 0.1,
             'maxima_smooth': 1,
-            'interior_threshold': 0.1,
-            'interior_smooth': 0.5,
-            'radius': 2
+            'interior_threshold': 0.01,
+            'interior_smooth':0,
+            'radius': 10,
+            'pixel_expansion': 0
         }
 
     all_sweeps = make_sweep(sweep_classical, default_kwargs)

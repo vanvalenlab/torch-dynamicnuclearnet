@@ -19,7 +19,7 @@ class DNNDataset(Dataset):
                  rotation_range=180,
                  zoom=0.75,
                  preprocess=False,
-                 target_mpp = 0.5,
+                 target_mpp = 0.65,
                 outer_erosion_width=1,
                 inner_distance_alpha="auto",
                 inner_distance_beta=1,
@@ -32,7 +32,7 @@ class DNNDataset(Dataset):
         self.y = y
 
         if self.mpps is not None:
-            self.mpps = np.where(np.isnan(self.mpps), 0.5, self.mpps)
+            self.mpps = np.where(np.isnan(self.mpps), 0.55, self.mpps)
         
         self.in_transforms = in_transforms
         self.augment = augment

@@ -47,8 +47,8 @@ class DNN():
         self.model = PanopticNet(
             crop_size=256,
             backbone='efficientnetv2bl',
-            pyramid_levels=['P3', 'P4', 'P5', 'P6', 'P7'],
-            backbone_levels=['C3', 'C4', 'C5'],
+            pyramid_levels=['P1','P2','P3', 'P4', 'P5', 'P6', 'P7'],
+            backbone_levels=['C1','C2','C3', 'C4', 'C5'],
             n_semantic_classes=n_semantic_classes
         )
 

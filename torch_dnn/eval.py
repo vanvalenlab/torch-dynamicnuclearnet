@@ -97,15 +97,15 @@ def create_overlays(x, gt, pred):
 @click.command()
 @click.option(
     '--device', 
-    default='cpu', 
+    default='cuda:1', 
     help="""The device that you want to run the inference on. 
             Can be `'cpu'` or `'cuda'`. If `'cuda'`, can also specify the specific GPU if multiple are available.""")
 
 @click.option(
     '--model-path', 
-    default= Path.home() / ".deepcell/models/mesmer/saved_model_best_dict.pth", 
+    default= Path.home() / ".deepcell/models/dnn/saved_model_best_dict.pth", 
     help="""Path to model. 
-            If unset, will use default DeepCell location (`~/.deepcell/models/mesmer/saved_model_best_dict.pth`)"""
+            If unset, will use default DeepCell location (`~/.deepcell/models/dnn/saved_model_best_dict.pth`)"""
             )
 
 @click.option(
@@ -142,7 +142,7 @@ def main(device: str,
     # Load model and application
     model = DNN(
         model_path=model_path,
-        device=device,
+        device=device
     )
 
     default_kwargs = {
@@ -150,9 +150,9 @@ def main(device: str,
         'fill_holes_threshold': 15,
         'maxima_threshold': 0.1,
         'maxima_smooth': 1,
-        'interior_threshold': 0.075,
+        'interior_threshold': 0.05,
         'interior_smooth': 0,
-        'radius': 2
+        'radius': 10
     }
 
     for i in tqdm.tqdm(range(X_test.shape[0])):

@@ -60,9 +60,6 @@ email = 'vanvalenlab@gmail.com'
 "Source Code" = 'https://github.com/vanvalenlab/torch-dnn'
 
 [project.optional-dependencies]
-eval = [
-    "deepcell-toolbox"
-]
 test = [
     "pytest"
 ]
