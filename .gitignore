@@ -4,4 +4,4 @@ data/
 _auth.py
 *.csv
 *.ipynb
-*/__pycache__/**
+**/__pycache__/**

@@ -4,7 +4,7 @@ A PyTorch implementation of DynamicNuclearNet for segmenting live nuclei for cel
 
 ## The Network
 
-DynamicNuclearNet (DNN) is built on a Panoptic network, consisting of an EfficientNetV2BL backbone connected to a [feature pyramid network](https://arxiv.org/abs/1612.03144). The levels of the backbone and feature pyramid network can be selected, but for the pre-trained DNN model, we use backbone levels `C3-C5`, and pyramid levels `P3-P7`. Pyramid levels are then upsampled to match the input resolution (256 x 256 px) and delivered to the semantic heads of the model.
+DynamicNuclearNet (DNN) is built on a Panoptic network, consisting of an EfficientNetV2BL backbone connected to a [feature pyramid network](https://arxiv.org/abs/1612.03144). The levels of the backbone and feature pyramid network can be selected, but for the pre-trained DNN model, we use backbone levels `C1-C5`, and pyramid levels `P1-P7`. Pyramid levels are then upsampled to match the input resolution (256 x 256 px) and delivered to the semantic heads of the model.
 
  In the pre-trained DNN model, there are three semantic heads:
 
@@ -52,11 +52,11 @@ We use the Adam optimizer with a learning rate of 0.0001. Upon a plateau in vali
 
 The loss function is a combination of weighted categorical cross entropy (WCCE) and mean squared error (MSE) loss. For continuous predictions (inner distance transforms), MSE loss was used. For categorical predictions (foreground and background), WCCE loss was used with class weights calculated for each batch. Loss from continuous heads was weighted with 0.01 to increase stability during training. The loss calculated from each head was summed and then used in backpropagation.
 
-We used a batch size of 12 images, and an augmented version of each images was seen only once during each epoch. The model was trained for 50 epochs, and we test the model that returned the lowest validation loss.
+We used a batch size of 10 images, and an augmented version of each images was seen only once during each epoch. The model was trained for 50 epochs, and we test the model that returned the lowest validation loss.
 
 ## The Testing
 
-The model was used to segment 1320 test images. These segmentations were then compared to the ground truth using a custom metrics pipeline that analyzes the following:
+The model was used to segment 717 test images. These segmentations were then compared to the ground truth using a custom metrics pipeline that analyzes the following:
 
 - **Recall**
 - **Precision**
@@ -67,4 +67,62 @@ The model was used to segment 1320 test images. These segmentations were then co
 - **Merges** - number of "many to one" errors
 - **Catastrophes** - number of "many to many" errors
 
- Each of these metrics was calculated for every image, allowing us to identify areas of weakness in each trained model.
+Each of these metrics was calculated for every image, allowing us to identify areas of weakness in each trained model.
+
+## How to use DNN
+
+### Instantiate the model
+
+```python
+from tifffile import imread
+import matplotlib.pyplot as plt
+import numpy as np
+from torch_dnn.dnn import DNN
+
+
+model = DNN(
+    model_path='data/model/20260511082148/saved_model_best_dict.pth',
+    device='cuda:0'
+)
+```
+
+### Read in the example image and view
+
+```python
+frame = imread('example/example_image.tiff')
+
+fig, ax = plt.subplots()
+ax.imshow(frame)
+ax.set_axis_off()
+ax.set_title('Nuclear Image')
+plt.show()
+```
+
+![image](example/nuclear_image.png)
+
+### Predict
+
+```python
+frame = frame[np.newaxis, np.newaxis] # model requires a time and channel axis
+
+mask = model.predict(frame)
+```
+
+### Plot the results
+
+```python
+fig, ax = plt.subplots(1,2)
+
+ax[0].imshow(frame.squeeze())
+ax[0].set_title('Nuclear Image')
+
+ax[1].imshow(mask.squeeze())
+ax[1].set_title('Predicted segmentation')
+
+for axis in ax:
+    axis.set_axis_off()
+
+fig.tight_layout()
+plt.show()
+```
+![image](example/nuclear_image_and_seg.png)

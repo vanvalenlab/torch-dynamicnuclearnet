@@ -132,9 +132,10 @@ class DNN():
 
         """
 
-        if np.isnan(image_mpp):
+        if image_mpp is None:
             image_mpp = self.model_mpp
 
+        image = image.copy()
 
         default_kwargs = {
             'maxima_threshold': 0.1,
