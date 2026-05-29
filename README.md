@@ -81,7 +81,7 @@ from torch_dnn.dnn import DNN
 
 
 model = DNN(
-    model_path='data/model/20260511082148/saved_model_best_dict.pth',
+    model_path='../.deepcell/dnn/saved_model_best_dict.pth',
     device='cuda:0'
 )
 ```
@@ -125,4 +125,5 @@ for axis in ax:
 fig.tight_layout()
 plt.show()
 ```
+
 ![image](example/nuclear_image_and_seg.png)
