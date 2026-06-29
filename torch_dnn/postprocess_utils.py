@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.ndimage as nd
-
+import tqdm
 from scipy.signal import windows
 from torch_dnn.utils import histogram_normalization, percentile_threshold, resize, erode_edges, fill_holes
 
@@ -494,7 +494,7 @@ def deep_watershed(transforms,
     B, C, H, W = transforms.shape
     
     label_images = np.zeros((B, 1, H, W))
-    for batch in range(B):
+    for batch in tqdm.tqdm(range(B), desc='Postprocessing frames...', leave=False):
 
         maxima = nd.gaussian_filter(transforms[batch, maxima_index], maxima_smooth)
         interior = nd.gaussian_filter(transforms[batch, interior_index], interior_smooth)
@@ -529,7 +529,7 @@ def deep_watershed(transforms,
             label_image = erode_edges(label_image, label_erosion)
 
         # Remove small objects
-        if small_objects_threshold:
+        if small_objects_threshold > 0:
             label_image = remove_small_objects(label_image,
                                                min_size=small_objects_threshold)
 

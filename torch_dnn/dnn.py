@@ -4,6 +4,7 @@ torch.set_num_threads(24)
 import numpy as np
 
 from torch_dnn.model import PanopticNet
+import tqdm
 
 from torch_dnn.postprocess_utils import resize_input, resize_output, deep_watershed, preprocess, untile_output, tile_input
 
@@ -61,7 +62,7 @@ class DNN():
         self.model_image_shape = (256, 256)
         # Require dimension 1 larger than model_input_shape due to addition of batch dimension
 
-        self.model_mpp = 0.55
+        self.model_mpp = 0.65
         
     def predict(self,
                 image,
@@ -165,7 +166,7 @@ class DNN():
         B_tiles = tiles.shape[0]
         output_tiles = np.zeros((B_tiles,) + (4,) + self.model_image_shape)
 
-        for tile_batch_start in range(0, tiles.shape[0], batch_size):
+        for tile_batch_start in tqdm.tqdm(range(0, tiles.shape[0], batch_size)):
             # Load only this batch to GPU
             tile_batch = torch.tensor(tiles[tile_batch_start:tile_batch_start+batch_size]).to(self.device)
             
@@ -177,7 +178,8 @@ class DNN():
 
         # Untile images
         output_images = untile_output(output_tiles, tiles_info)
-
+        print()
+        print('Postprocessing')
         label_image = deep_watershed(
             output_images,
             **postprocess_kwargs
