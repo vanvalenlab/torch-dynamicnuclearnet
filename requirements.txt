@@ -5,10 +5,11 @@ scikit-image
 torch
 torchvision
 tqdm
-zarr
+zarr>=2.18
 matplotlib
 seaborn
 networkx
 tensorboard
 opencv-python
 click
+pytest
