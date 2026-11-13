@@ -48,32 +48,21 @@ DEFAULT_POSTPROCESS_KWARGS = {
 # Where ``DNN()`` looks for weights when no ``model_path`` is given: the newest
 # (by name) file matching ``torch-dnn*.pth`` in ``~/.deepcell/models``, e.g.
 # ``torch-dnn_2026-11-20.pth``.
-DEFAULT_MODEL_DIR = Path.home() / '.deepcell' / 'models'
-DEFAULT_MODEL_GLOB = 'torch-dnn*.pth'
+
+_RELEASED_WEIGHTS_REPO = 'vanvalenlab/torch-dynamicnuclearnet'
+_RELEASED_WEIGHTS_FILE = 'torch-dnn_2026-11-13.pth'
 
 
-def default_model_path(model_dir=None):
-    """The newest ``torch-dnn*.pth`` in ``model_dir`` (default ``~/.deepcell/models``).
+def _released_weights_path():
+    """Download the released weights from Hugging Face if they are not in
+    ``~/.deepcell/models`` yet, and return their local path (str)."""
+    from huggingface_hub import hf_hub_download
 
-    Returns:
-        pathlib.Path: the file whose name sorts last (date-stamped names sort by date).
-
-    Raises:
-        FileNotFoundError: if there is none, with instructions for training a model.
-    """
-    model_dir = Path(DEFAULT_MODEL_DIR if model_dir is None else model_dir)
-    found = sorted(model_dir.glob(DEFAULT_MODEL_GLOB))
-    if not found:
-        raise FileNotFoundError(
-            f'No DynamicNuclearNet weights found: there is no {DEFAULT_MODEL_GLOB} file in '
-            f'{model_dir}. There are no released weights for the current torch_dnn network, '
-            'so train a model first with `python -m torch_dnn.train`. Its best checkpoint is '
-            'saved as data/model/<timestamp>/saved_model_best_dict.pth (relative to the folder '
-            'training ran in); pass that file as model_path, or copy it to '
-            f'{model_dir}/torch-dnn_<date>.pth to make it the '
-            'default. (Weights of the original torch_dnn network, such as '
-            '~/.deepcell/models/dnn/saved_model_best_dict.pth, cannot be loaded.)')
-    return found[-1]
+    return hf_hub_download(
+        repo_id=_RELEASED_WEIGHTS_REPO,
+        filename=_RELEASED_WEIGHTS_FILE,
+        local_dir=Path.home() / '.deepcell' / 'models',
+    )
 
 
 def _default_device():
@@ -130,7 +119,7 @@ class DNN():
         self.device = _default_device() if device is None else device
 
         if model_path is None:
-            model_path = default_model_path()
+            model_path = _released_weights_path()
 
         print("Initializing model...")
 
