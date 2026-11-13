@@ -13,3 +13,4 @@ tensorboard
 opencv-python
 click
 pytest
+huggingface_hub
