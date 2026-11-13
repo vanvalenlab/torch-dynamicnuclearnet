@@ -5,60 +5,65 @@ import numpy as np
 import scipy.ndimage as nd
 
 import skimage
-import matplotlib.pyplot as plt
 
-from scipy.spatial.distance import cdist
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import connected_components
 
 eps = 1e-7
 
 def resize(data: np.typing.ArrayLike, shape: tuple, data_format='channels_last', labeled_image=False):
-    """Resize the data to the given shape.
-    Uses openCV to resize the data if the data is a single channel, as it
-    is very fast. However, openCV does not support multi-channel resizing,
-    so if the data has multiple channels, use skimage.
+    """Resize a batch of images to the given height and width, as deepcell-toolbox's
+    ``utils.resize`` does.
+
+    Single-channel data (DynamicNuclearNet's images and masks) are resized with
+    OpenCV, as in the toolbox: bilinear (``cv2.INTER_LINEAR``, on float32, no
+    anti-aliasing) for images, nearest neighbour (``cv2.INTER_NEAREST``) for label
+    images. Multi-channel data are resized with ``skimage.transform.resize``:
+    order 1 with anti-aliasing for images, order 0 without for labels.
 
     Args:
-        data (np.array): data to be reshaped. Must have a channel dimension
-        shape (tuple): shape of the output data in the form (x,y).
-            Batch and channel dimensions are handled automatically and preserved.
-        data_format (str): determines the order of the channel axis,
-            one of 'channels_first' and 'channels_last'.
-        labeled_image (bool): flag to determine how interpolation and floats are handled based
-         on whether the data represents raw images or annotations
-
-    Raises:
-        ValueError: ndim of data not 3 or 4
-        ValueError: Shape for resize can only have length of 2, e.g. (x,y)
+        data (np.array): data to be resized, 4D: ``(B, H, W, C)`` or, with
+            ``data_format='channels_first'``, ``(B, C, H, W)``.
+        shape (tuple): the new ``(H, W)``. Batch and channel dimensions are kept.
+        data_format (str): where the channel axis is, ``'channels_first'`` or
+            ``'channels_last'``.
+        labeled_image (bool): ``data`` holds label images (use nearest neighbour,
+            which never invents labels) rather than intensities.
 
     Returns:
-        numpy.array: data reshaped to new shape.
+        numpy.array: the resized data, in the input's axis order and dtype.
     """
-
     original_dtype = data.dtype
 
     if data_format == 'channels_first':
         data = np.moveaxis(data, 1, -1)
 
     B, H, W, C = data.shape
-    new_shape = shape + (C,)
-    
-    # linear interpolation (order 1) for image data, nearest neighbor (order 0) for labels
-    # anti_aliasing introduces spurious labels, include only for image data
-    order = 0 if labeled_image else 1
-    anti_aliasing = not labeled_image
+    shape = tuple(int(s) for s in shape)
 
-    # Check for batch dimension to loop over
-    if len(data.shape) == 4:
-        resized = np.zeros((B,) + new_shape)
+    if C == 1:
+        import cv2  # lazy: only single-channel resizing needs OpenCV
+
+        if labeled_image:
+            interpolation = cv2.INTER_NEAREST
+            # cv2 cannot resize 64-bit integers; float64 holds labels exactly.
+            work_dtype = np.float64
+        else:
+            interpolation = cv2.INTER_LINEAR
+            work_dtype = np.float32  # as in the toolbox (cv2 linear needs floats)
+        resized = np.zeros((B,) + shape + (1,), dtype=work_dtype)
+        for i in range(B):
+            # cv2 takes the size as (width, height)
+            resized[i, ..., 0] = cv2.resize(data[i, ..., 0].astype(work_dtype), shape[::-1],
+                                            interpolation=interpolation)
+    else:
+        # linear interpolation (order 1) for image data, nearest neighbor (order 0) for labels
+        # anti_aliasing introduces spurious labels, include only for image data
+        order = 0 if labeled_image else 1
+        anti_aliasing = not labeled_image
+        resized = np.zeros((B,) + shape + (C,))
         for i in range(B):
             resized[i] = skimage.transform.resize(data[i], shape, mode='constant', preserve_range=True,
-                                            order=order, anti_aliasing=anti_aliasing)
-    else:
-        resized = skimage.transform.resize(data, shape, mode='constant', preserve_range=True,
-                                            order=order, anti_aliasing=anti_aliasing)
-        
+                                                  order=order, anti_aliasing=anti_aliasing)
+
     if data_format == 'channels_first':
         resized = np.moveaxis(resized, -1, 1)
 
@@ -223,43 +228,30 @@ def pixelwise(prediction: np.typing.ArrayLike, threshold=.8, min_size=50, interi
 
     return labeled_prediction
 
-def peak_concomp(image: np.typing.ArrayLike, maxima_threshold=0.7):
+# Names of the 4 channels of the DynamicNuclearNet output and targets, in order
+# (see ``torch_dnn.model.PanopticNet``).
+DNN_CHANNEL_NAMES = ['inner distance', 'outer distance', 'background', 'foreground']
 
-    '''
-    Uses connected components via  ``regionprops`` to find centroids 
-    weighted by intensity image.
+
+def create_sample_overlay(labels, transforms, transform_names=None):
+    """A figure of one image's predicted and true targets, for TensorBoard.
 
     Args:
-        inputs: (list): list of [maximas, interiors] model outputs.
-        maxima_threshold (float): the rough thresholding used to find 
-            region masks. Should be /very/ strict.
+        labels (torch.Tensor): the true targets, ``(4, H, W)`` in the network's
+            layout: inner distance, outer distance, then the background and
+            foreground classes.
+        transforms (torch.Tensor): the network's prediction, in the same layout.
+        transform_names (list[str]): a title for each channel; defaults to
+            ``DNN_CHANNEL_NAMES``.
 
     Returns:
-        markers (numpy.array): Mask of points corresponding to predicted
-            centroid 'seeds' that is then passed into the watershedding algorithm.
+        matplotlib.figure.Figure: predictions in the top row and true targets in
+        the bottom row, one column per channel, each on a 0-1 colour scale.
+    """
+    import matplotlib.pyplot as plt  # lazy: only this plotting helper needs matplotlib
 
-    '''
-    markers = np.zeros_like(image.squeeze())
-    maxima_thresh = image > maxima_threshold
-    maxima_thresh = skimage.measure.label(maxima_thresh.astype('uint8').squeeze())
-    maxima_props = skimage.measure.regionprops(maxima_thresh, intensity_image=image.squeeze())
-
-
-    for prop in maxima_props:
-        x, y = (
-            np.around(prop['centroid_weighted'][0]).astype(int), 
-            np.around(prop['centroid_weighted'][1]).astype(int)
-            )
-        
-        markers[x,y] = prop['label']
-
-    return markers
-
-def create_sample_overlay(labels, transforms):
-
-    transform_names = ['inner', 'pixel1','pixel2','bg']
-
-    # 4, H, W
+    if transform_names is None:
+        transform_names = DNN_CHANNEL_NAMES
 
     labels = labels.cpu().numpy()
     transforms = transforms.cpu().numpy()
@@ -282,40 +274,47 @@ def create_sample_overlay(labels, transforms):
 
 def compute_overlap_vectorized(boxes, query_boxes):
     """
-    Vectorized computation of IoU overlaps.
-    
-    Args
-        boxes: (N, 4) ndarray of float - format [x1, y1, x2, y2]
-        query_boxes: (K, 4) ndarray of float - format [x1, y1, x2, y2]
+    Vectorized computation of box IoU overlaps, in 2D or 3D.
 
-    Returns
+    Matches ``compute_overlap`` (2D) and ``compute_overlap_3D`` (3D) from
+    ``deepcell-toolbox/deepcell_toolbox/compute_overlap.pyx``, including the
+    ``+ 1`` inclusive-pixel convention.
+
+    Args:
+        boxes: (N, 2*d) ndarray of float, in skimage ``bbox`` order:
+            [x1, y1, x2, y2] for 2D, or [z1, x1, y1, z2, x2, y2] for 3D
+        query_boxes: (K, 2*d) ndarray of float, same format
+
+    Returns:
         overlaps: (N, K) ndarray of overlap between boxes and query_boxes
     """
-    N = boxes.shape[0]
-    K = query_boxes.shape[0]
-    
-    # Compute areas
-    boxes_area = (boxes[:, 2] - boxes[:, 0] + 1) * (boxes[:, 3] - boxes[:, 1] + 1)
-    query_area = (query_boxes[:, 2] - query_boxes[:, 0] + 1) * (query_boxes[:, 3] - query_boxes[:, 1] + 1)
-    
-    # Broadcast to compute intersections
-    # boxes: (N, 1, 4), query_boxes: (1, K, 4)
-    iw = (np.minimum(boxes[:, None, 2], query_boxes[None, :, 2]) - 
-          np.maximum(boxes[:, None, 0], query_boxes[None, :, 0]) + 1)
-    ih = (np.minimum(boxes[:, None, 3], query_boxes[None, :, 3]) - 
-          np.maximum(boxes[:, None, 1], query_boxes[None, :, 1]) + 1)
-    
+    boxes = np.asarray(boxes, dtype=np.float64)
+    query_boxes = np.asarray(query_boxes, dtype=np.float64)
+    if boxes.size == 0 or query_boxes.size == 0:
+        return np.zeros((len(boxes), len(query_boxes)), dtype=np.float64)
+    if boxes.shape[1] != query_boxes.shape[1] or boxes.shape[1] % 2:
+        raise ValueError('boxes and query_boxes must both have 4 (2D) or 6 (3D) '
+                         f'columns, got {boxes.shape[1]} and {query_boxes.shape[1]}')
+    ndim = boxes.shape[1] // 2
+
+    # Box sizes along each axis: (N, d) and (K, d)
+    box_sizes = boxes[:, ndim:] - boxes[:, :ndim] + 1
+    query_sizes = query_boxes[:, ndim:] - query_boxes[:, :ndim] + 1
+
+    # Broadcast to compute the intersection extent along each axis: (N, K, d)
+    inter_sizes = (np.minimum(boxes[:, None, ndim:], query_boxes[None, :, ndim:]) -
+                   np.maximum(boxes[:, None, :ndim], query_boxes[None, :, :ndim]) + 1)
     # Clip to 0
-    iw = np.maximum(iw, 0)
-    ih = np.maximum(ih, 0)
-    
+    inter_sizes = np.maximum(inter_sizes, 0)
+
     # Compute intersection and union
-    intersection = iw * ih
-    union = boxes_area[:, None] + query_area[None, :] - intersection
-    
+    intersection = np.prod(inter_sizes, axis=-1)
+    union = (np.prod(box_sizes, axis=-1)[:, None] + np.prod(query_sizes, axis=-1)[None, :]
+             - intersection)
+
     # Compute IoU
     overlaps = intersection / union
-    
+
     return overlaps
 
 def cast_to_tuple(x):
@@ -448,45 +447,3 @@ def split_stack(arr, batch, n_split1, axis1, n_split2, axis2):
     split2con = np.concatenate(split2, axis=0)
 
     return split2con
-
-def merge_nearby_points(points, r):
-    """
-    Merge points within distance r by averaging coordinates.
-    
-    Parameters:
-    -----------
-    points : array-like, shape (n, 2)
-        Array of (x, y) coordinates
-    distance_matrix : array-like, shape (n, n)
-        Pairwise distance matrix
-    r : float
-        Distance threshold for merging
-    
-    Returns:
-    --------
-    merged_points : ndarray, shape (m, 2)
-        Array of merged point coordinates
-    labels : ndarray, shape (n,)
-        Cluster label for each original point
-    """
-    points = np.asarray(points)
-
-    distance_matrix = cdist(points, points)    
-    # Create adjacency matrix: points are connected if distance <= r
-    adjacency = distance_matrix <= r
-    
-    # Find connected components
-    n_components, labels = connected_components(
-        csgraph=csr_matrix(adjacency),
-        directed=False
-    )
-    
-    # Merge points in each component by averaging
-    merged_points = np.zeros((n_components, 2))
-    for i in range(n_components):
-        mask = labels == i
-        merged_points[i] = points[mask].mean(axis=0)
-    
-    merged_points = merged_points.astype(int)
-    
-    return merged_points

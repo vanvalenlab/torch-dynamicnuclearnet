@@ -35,14 +35,20 @@ classifiers = [
     'Topic :: Scientific/Engineering :: Image Analysis',
 ]
 dependencies = [
+    "click",
     "ipython",
     "matplotlib",
+    "networkx",
+    "numpy",
     "opencv-python-headless",
     "scikit-image",
     "scipy",
     "torch",
     "torchvision",
     "tqdm",
+    "zarr>=2.18",  # 2.18 on Python 3.10 (zarr 3 needs 3.11+); the code works with both
+    "pandas",
+    "tensorboard",
 ]
 
 [[project.authors]]
@@ -82,6 +88,22 @@ attr = 'torch_dnn.__version__'
 
 # [tool.setuptools.package-data]
 # torch_dnn = ['tests/*.py']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "data: needs the DynamicNuclearNet zarrs in ~/.deepcell/dynamic_nuclear_net/ (skipped if missing)",
+    "slow: builds the full PanopticNet on CPU or reads a whole split (seconds to a minute)",
+]
+xfail_strict = true
+filterwarnings = [
+    # Noise from the reference checkouts (loaded by tests/_reference.py) and from
+    # inside third-party libraries. Warnings raised by torch_dnn itself stay visible.
+    "ignore::FutureWarning:deepcell_toolbox",
+    "ignore::FutureWarning:_ref_transform_utils",
+    "ignore:Setting the shape on a NumPy array:DeprecationWarning",
+    "ignore:_pytest.python.CallSpec2 has been renamed",
+]
 
 [tool.ruff]
 line-length = 110

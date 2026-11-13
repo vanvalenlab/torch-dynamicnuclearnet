@@ -1,189 +1,265 @@
-import torch
-torch.set_num_threads(24)
+import math
+from pathlib import Path
 
 import numpy as np
+import torch
+from tqdm import tqdm
 
-from torch_dnn.model import PanopticNet
-import tqdm
+from torch_dnn.model import PanopticNet, DNN_MODEL_KWARGS, DNN_OUTPUT_CHANNELS
 
-from torch_dnn.postprocess_utils import resize_input, resize_output, deep_watershed, preprocess, untile_output, tile_input
+from torch_dnn.postprocess_utils import (
+    resize_input, resize_output, dnn_preprocess, dnn_postprocess, untile_output, tile_input,
+)
+
+# Resolution the network works at, in microns per pixel (deepcell's NuclearSegmentation
+# 1.1 config). Images at other resolutions are resized to it and the masks resized back.
+MODEL_MPP = 0.65
+
+# deepcell's NuclearSegmentation 1.1 post-processing config
+# (deepcell/applications/nuclear_segmentation.py), tuned for deepcell's TF weights and
+# kept for reference. That config also passes ``min_distance=10``, a deprecated alias of
+# ``radius`` with the same value, so it is left out (it would only raise a
+# DeprecationWarning). Every other ``deep_watershed`` setting keeps its default, as in
+# deepcell: maxima_smooth=0, interior_smooth=1, fill_holes_threshold=0,
+# pixel_expansion=None, label_erosion=0, maxima_algorithm='h_maxima' (so
+# ``exclude_border`` has no effect). Head indices are not listed here:
+# ``dnn_postprocess`` takes them from ``postprocess_utils.DNN_HEAD_INDICES``.
+TF_POSTPROCESS_KWARGS = {
+    'radius': 10,
+    'maxima_threshold': 0.1,
+    'interior_threshold': 0.01,
+    'exclude_border': False,
+    'small_objects_threshold': 0,
+}
+
+# Post-processing defaults for ``DNN.predict``: re-tuned on the validation split with
+# ``torch_dnn/postprocess_sweep.py`` for the torch weights trained 2026-11-13 (batch 32,
+# 16 epochs). Pooled F1 on validation: 0.9546 with ``TF_POSTPROCESS_KWARGS`` -> 0.9610,
+# better for every cell line. Settings within ~0.001 F1 of the best formed a broad
+# plateau (radius 2-4, maxima_threshold 0.15-0.25, interior_threshold 0.02-0.03); this
+# is its middle. Re-tune after training new weights.
+DEFAULT_POSTPROCESS_KWARGS = {
+    **TF_POSTPROCESS_KWARGS,
+    'radius': 3,
+    'maxima_threshold': 0.2,
+    'interior_threshold': 0.03,
+}
+
+# Where ``DNN()`` looks for weights when no ``model_path`` is given: the newest
+# (by name) file matching ``torch-dnn*.pth`` in ``~/.deepcell/models``, e.g.
+# ``torch-dnn_2026-11-20.pth``.
+DEFAULT_MODEL_DIR = Path.home() / '.deepcell' / 'models'
+DEFAULT_MODEL_GLOB = 'torch-dnn*.pth'
+
+
+def default_model_path(model_dir=None):
+    """The newest ``torch-dnn*.pth`` in ``model_dir`` (default ``~/.deepcell/models``).
+
+    Returns:
+        pathlib.Path: the file whose name sorts last (date-stamped names sort by date).
+
+    Raises:
+        FileNotFoundError: if there is none, with instructions for training a model.
+    """
+    model_dir = Path(DEFAULT_MODEL_DIR if model_dir is None else model_dir)
+    found = sorted(model_dir.glob(DEFAULT_MODEL_GLOB))
+    if not found:
+        raise FileNotFoundError(
+            f'No DynamicNuclearNet weights found: there is no {DEFAULT_MODEL_GLOB} file in '
+            f'{model_dir}. There are no released weights for the current torch_dnn network, '
+            'so train a model first with `python -m torch_dnn.train`. Its best checkpoint is '
+            'saved as data/model/<timestamp>/saved_model_best_dict.pth (relative to the folder '
+            'training ran in); pass that file as model_path, or copy it to '
+            f'{model_dir}/torch-dnn_<date>.pth to make it the '
+            'default. (Weights of the original torch_dnn network, such as '
+            '~/.deepcell/models/dnn/saved_model_best_dict.pth, cannot be loaded.)')
+    return found[-1]
+
+
+def _default_device():
+    """``'cuda'`` or ``'mps'`` if available, otherwise ``'cpu'``."""
+    if torch.cuda.is_available():
+        return 'cuda'
+    if torch.backends.mps.is_available():
+        return 'mps'
+    return 'cpu'
 
 
 class DNN():
+    """The DynamicNuclearNet nuclear segmentation pipeline, after deepcell's
+    ``NuclearSegmentation`` application.
 
-    def __init__(
-            self, 
-            model_path=None, 
-            device=None, 
-            n_semantic_classes=[1,1,2]
-    ):
-        
-        """        
-        Initializes a Panoptic network segmentation model using the following parameters.
-        
-        :params model_path: the path to where the model weights are stored
-        :type model_path: str
-        
-        :params device: GPU where you would like to conduct inference. 
-            Must be one of "cuda", "mps" or "cpu"
-        :type device: str
+    The input is a stack of single-channel nuclear images (for example the
+    frames of a time-lapse movie), channels first: ``(frames, 1, x, y)``.
 
-        :params n_semantic_classes: Number of prediction heads used in the model.
-                For Mesmer, use `[1, 3, 1, 3]` 
-                for Dynamic Nuclear Net, use `[1, 3]`
-        :type n_semantic_classes: list
+    `predict` runs the whole pipeline: rescale to the model's 0.65 µm/pixel,
+    normalise, tile, run the network, stitch the tiles together, turn the
+    network output into label masks and resize them back. See the `predict`
+    docstring for details.
+    """
 
+    def __init__(self, model_path=None, device=None):
         """
+        Instantiate the DynamicNuclearNet segmentation pipeline.
 
-        if device is None:
-            self.device = 'cpu'
-        else:
-            self.device=device
+        Parameters
+        ----------
+        model_path : str or pathlib.Path, default=None
+            The trained weights: a ``.pth`` file holding a ``PanopticNet``
+            state dict, as saved by ``torch_dnn.train``
+            (``data/model/<timestamp>/saved_model_best_dict.pth``). If not
+            given, the newest ``~/.deepcell/models/torch-dnn*.pth`` is used
+            (see `default_model_path`); there are no released weights to
+            download.
+
+        device : str, default=None
+            A `torch.device` compatible specifier indicating the hardware to be
+            used for inference, e.g. ``"cuda"``, ``"cuda:4"``, ``"mps"``, or
+            ``"cpu"``. If not specified (the default), a cuda or mps backend is
+            used if one is detected, falling back to ``"cpu"`` if not.
+
+        Raises
+        ------
+        FileNotFoundError
+            No ``model_path`` was given and there are no weights in ``~/.deepcell/models``.
+        ValueError
+            The checkpoint does not fit the network, for example weights of the
+            original torch_dnn network (no ``arch_version`` entry) or a Mesmer
+            checkpoint.
+        """
+        self.device = _default_device() if device is None else device
 
         if model_path is None:
-            raise Exception("Please provide a path to the model checkpoint file.")
-        
-        print("Initializing model...")
-        
-        self.model = PanopticNet(
-            crop_size=256,
-            backbone='efficientnetv2bl',
-            pyramid_levels=['P1','P2','P3', 'P4', 'P5', 'P6', 'P7'],
-            backbone_levels=['C1','C2','C3', 'C4', 'C5'],
-            n_semantic_classes=n_semantic_classes
-        )
+            model_path = default_model_path()
 
-        self.model = self.model.to(self.device).eval()
+        print("Initializing model...")
 
         checkpoint = torch.load(model_path, map_location=self.device)
-        self.model.load_state_dict(checkpoint)
-        # Whole cell, nuc
+        self.model = self._build_network(checkpoint)
 
         self.model_image_shape = (256, 256)
         # Require dimension 1 larger than model_input_shape due to addition of batch dimension
+        self.required_rank = len(self.model_image_shape) + 2
+        self.required_channels = DNN_MODEL_KWARGS['in_channels']
 
-        self.model_mpp = 0.65
-        
+        self.model_mpp = MODEL_MPP
+
+    def _build_network(self, checkpoint):
+        """The ``PanopticNet`` for ``checkpoint``, with its weights loaded strictly,
+        on ``self.device`` and in eval mode. Raises ``ValueError`` for a checkpoint
+        that does not fit (see ``PanopticNet.load_state_dict``)."""
+        if not isinstance(checkpoint, dict):
+            raise ValueError(f'Expected a PanopticNet state dict, got a {type(checkpoint).__name__}')
+        # use_imagenet=False: every weight is overwritten by load_state_dict
+        # below, so downloading the ImageNet backbone would be wasted.
+        model = PanopticNet(**DNN_MODEL_KWARGS, use_imagenet=False)
+        model.load_state_dict(checkpoint)
+        return model.to(self.device).eval()
+
     def predict(self,
                 image,
+                image_mpp,
                 batch_size=4,
-                image_mpp=None,
-                pad_mode='constant',
+                pad_mode='reflect',
                 return_transforms=False,
-                postprocess_kwargs={}):
-        
-        """Generates a labeled image of the input running prediction with
-        appropriate pre and post processing functions.
+                preprocess_kwargs=None,
+                postprocess_kwargs=None,
+                verbose=True):
+        """Compute nuclear label masks for `image`.
 
-        Input images are required to have 4 dimensions
-        ``[T, channel, x, y]``. Channel dimension must be 2 and must come first.
-        Additional empty dimensions can be added using ``np.expand_dims``.
+        The steps: rescale the images to the model's 0.65 µm/pixel, normalise
+        them (`dnn_preprocess`: CLAHE, as deepcell's ``histogram_normalization``),
+        cut them into 256x256 tiles, run the network, stitch its output back
+        together, turn it into label masks (`dnn_postprocess`: ``deep_watershed``
+        seeded by the inner distance, masked by the outer distance) and resize
+        the masks back to the input size.
 
-        :param image: Input image with shape
-                ``[T, channel, x, y]``. 
-                **Nuclear image is expected in the first channel,
-                cytoplasmic image is expected in the second.**
-        :type image: (numpy.array)
-        
-        :param batch_size: Number of images to predict on per batch.
-        :type batch_size: int
+        Input images are required to be **channels first**, with 4 dimensions
+        ``[batch, channel, x, y]`` and exactly 1 channel. The batch axis can hold
+        the frames of a movie; each frame is segmented on its own. Add missing
+        axes with ``image[np.newaxis, np.newaxis]`` (one 2D image) or
+        ``image[:, np.newaxis]`` (a ``(frames, x, y)`` stack).
 
-        :param image_mpp: Microns per pixel for ``image``.
-        :type image_mpp: float
+        Parameters
+        ----------
+        image : array_like with shape ``[batch, 1, x, y]``
+            The nuclear images to segment.
 
-        :param compartment: Specify type of segmentation to predict.
-                Must be one of ``"whole-cell"``, ``"nuclear"``, ``"both"``.
-        :type compartment: str
-        
-        :param preprocess_kwargs: Keyword arguments to pass to the
-                pre-processing function.
-        :type preprocess_kwargs: dict
+        image_mpp : float or None
+            The scale of the image in microns per pixel. It is required: pass
+            ``None`` only to state that the image is already at the model's
+            0.65 µm/pixel (no rescaling). The same value applies to every image
+            in the batch.
 
-        :param postprocess_kwargs: Keyword arguments to pass to the
-                pre-processing function.
-        :type postprocess_kwargs: dict
+        batch_size : int, default=4
+            Number of 256x256 tiles to run through the network at once. This
+            controls the memory footprint of inference.
 
-        :raises ValueError: Input data must match required rank of the application,
-                calculated as one dimension more (batch dimension) than expected
-                by the model.
-        :raises ValueError: Input data must match required number of channels.
+        pad_mode : str, default="reflect"
+            Type of padding used when tiling images larger than 256x256 (see
+            `numpy.pad`). ``"reflect"`` is deepcell's NuclearSegmentation default.
 
-        :returns label_image:  Instance segmentation mask with shape ``[batch, x, y, channel]``.
-                Cytoplasmic mask is returned in the first channel, nuclear mask is 
-                returned in the second. **Note that this is opposite of the input order!**
-        :type label_image: numpy.array
-        :returns output_transforms: Raw predictions from the model itself with 
-                shape ``[T, x, y, 8]``.
+        return_transforms : bool, default=False
+            Whether to return the raw network output (i.e. prior to postprocessing)
+            along with the label image.
 
-                - Channels 1-4 (inds 0-3): cytoplasmic predictions
-                - Channels 5-8 (inds 4-7): nuclear predictions
-                - Prediction 1: Inner distance transform
-                - Prediction 2: Outer boundary of the object
-                - Prediction 3: Interior pixels of the object
-                - Prediction 4: Image background
+        preprocess_kwargs : dict, default=None
+            Keyword arguments for `dnn_preprocess`: ``kernel_size`` (CLAHE kernel;
+            default ``None``, 1/8 of the image size).
 
-        :type output_transforms: numpy.array
+        postprocess_kwargs : dict, default=None
+            Keyword arguments for ``deep_watershed`` (see `dnn_postprocess`). Keys
+            given here override ``DEFAULT_POSTPROCESS_KWARGS``; ``None`` uses those
+            defaults.
 
-        .. Example::
-        
-            >>> X_test = np.random.random((1,512,512,2))
-            >>> output_image = app.predict(X_test, image_mpp=0.5, compartment='both)
-            >>> print(output_image.shape)
-                    (1, 512, 512, 2)
+        verbose : bool, default=True
+            Show progress bars for running the network over the tiles and for
+            post-processing the frames.
 
+        Returns
+        -------
+        label_image : numpy.array
+            Integer nuclear label masks, shape ``(batch, 1, x, y)``, the size of
+            `image`; 0 is background.
+
+        OR
+
+        label_image, output_image : numpy.array
+            If ``return_transforms=True``, the raw network output is returned too,
+            ``(batch, 4, x', y')`` at the model's resolution (not resized back):
+            channel 0 inner distance, 1 outer distance, 2-3 the foreground/background
+            probabilities (background, foreground).
+
+        Raises
+        ------
+        ValueError
+            If `image` is not ``(batch, 1, x, y)``, or `image_mpp` is not a positive
+            number or None.
+
+        Examples
+        --------
+        >>> frames = np.random.random((3, 1, 512, 512))
+        >>> masks = app.predict(frames, image_mpp=0.65)
+        >>> masks.shape
+        (3, 1, 512, 512)
         """
-
-        if image_mpp is None:
-            image_mpp = self.model_mpp
-
-        image = image.copy()
-
-        default_kwargs = {
-            'maxima_threshold': 0.1,
-            'maxima_smooth': 0,
-            'interior_threshold': 0.075,
-            'interior_smooth': 1,
-            'small_objects_threshold': 15,
-            'fill_holes_threshold': 15,
-            'radius': 2,
-            'maxima_index': 0,
-            'interior_index': 2,
-            'pixel_expansion': 0
-        }
+        image = np.asarray(image)
+        self._check_input(image)
+        image_mpp = self._check_mpp(image_mpp)
 
         # overwrite defaults with any user-provided values
-        postprocess_kwargs = {**default_kwargs,
-                                         **postprocess_kwargs}
-
+        postprocess_kwargs = {**DEFAULT_POSTPROCESS_KWARGS, **(postprocess_kwargs or {})}
 
         # Keep track of original shape for rescaling after processing
         orig_img_shape = image.shape
 
         resized_image = resize_input(image, image_mpp, self.model_mpp)
-        image = preprocess(resized_image)
-        # Tile images, raises error if the image is not 4d
+        image = dnn_preprocess(resized_image, **(preprocess_kwargs or {}))
         tiles, tiles_info = tile_input(image, pad_mode=pad_mode, model_image_shape=self.model_image_shape)
-        B_tiles = tiles.shape[0]
-        output_tiles = np.zeros((B_tiles,) + (4,) + self.model_image_shape)
-
-        for tile_batch_start in tqdm.tqdm(range(0, tiles.shape[0], batch_size)):
-            # Load only this batch to GPU
-            tile_batch = torch.tensor(tiles[tile_batch_start:tile_batch_start+batch_size]).to(self.device)
-            
-            with torch.inference_mode():
-                pred = self.model(tile_batch)
-                        
-            # Move predictions back to CPU to save GPU memory
-            output_tiles[tile_batch_start:tile_batch_start+batch_size] = pred.cpu()
-
-        # Untile images
+        output_tiles = self._run_network(tiles, batch_size, verbose=verbose)
         output_images = untile_output(output_tiles, tiles_info)
-        print()
-        print('Postprocessing')
-        label_image = deep_watershed(
-            output_images,
-            **postprocess_kwargs
-            )
+
+        label_image = dnn_postprocess(output_images, progbar=verbose, **postprocess_kwargs)
 
         label_image = resize_output(label_image, orig_img_shape).astype(int)
 
@@ -191,3 +267,66 @@ class DNN():
             return label_image, output_images
         else:
             return label_image
+
+    def _check_input(self, image):
+        """Raise a ``ValueError``, with a hint on how to fix it, unless ``image`` has
+        shape ``(batch, 1, x, y)``."""
+        if image.ndim != self.required_rank:
+            hint = ''
+            if image.ndim == 2:
+                hint = ' For one 2D image, use image[np.newaxis, np.newaxis].'
+            elif image.ndim == 3:
+                hint = ' For a (frames, x, y) stack, use image[:, np.newaxis].'
+            raise ValueError(
+                f'Input data must have {self.required_rank} dimensions '
+                f'[batch, channel, x, y]; got shape {image.shape}.{hint}')
+        if image.shape[1] != self.required_channels:
+            hint = ''
+            if image.shape[-1] == self.required_channels:
+                hint = (' This looks like channels-last input; convert it with '
+                        'np.moveaxis(image, -1, 1).')
+            raise ValueError(
+                f'Input data must have {self.required_channels} channel '
+                f'(nuclear) in dimension 1 (channels first); '
+                f'got shape {image.shape}.{hint}')
+
+    def _check_mpp(self, image_mpp):
+        """``image_mpp`` as a float (or None), or a ``ValueError`` if it is not a
+        positive number. A missing value (NaN) is rejected rather than guessed."""
+        if image_mpp is None:
+            return None
+        try:
+            value = float(image_mpp)
+        except (TypeError, ValueError):
+            raise ValueError(f'image_mpp must be a number (microns per pixel) or None, '
+                             f'got {image_mpp!r}') from None
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(
+                f'image_mpp must be a positive number of microns per pixel, got {image_mpp!r}. '
+                f'Pass None if the image is already at the model resolution ({self.model_mpp}).')
+        return value
+
+    def _run_network(self, tiles, batch_size, verbose=False):
+        """Run the network on ``tiles``, ``(n_tiles, 1, 256, 256)``, ``batch_size`` at a time.
+
+        Returns:
+            numpy.array: the network output, ``(n_tiles, 4, 256, 256)``, in the dtype of ``tiles``.
+        """
+        output_tiles = np.zeros(
+            (tiles.shape[0], DNN_OUTPUT_CHANNELS) + self.model_image_shape,
+            dtype=tiles.dtype,
+        )
+
+        starts = range(0, tiles.shape[0], batch_size)
+        for tile_batch_start in tqdm(starts, desc='Running network on tiles', leave=False,
+                                     disable=not verbose):
+            # Load only this batch to GPU
+            tile_batch = torch.tensor(tiles[tile_batch_start:tile_batch_start+batch_size]).to(self.device)
+
+            with torch.inference_mode():
+                pred = self.model(tile_batch)
+
+            # Move predictions back to CPU to save GPU memory
+            output_tiles[tile_batch_start:tile_batch_start+batch_size] = pred.cpu().numpy()
+
+        return output_tiles
