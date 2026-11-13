@@ -158,9 +158,9 @@ first 20 images, for a quick check.
 
 **Re-tune post-processing after training.** The network does not output masks directly:
 it predicts two "distance" maps, and a watershed step turns them into masks. That
-step's settings (`DEFAULT_POSTPROCESS_KWARGS` in `torch_dnn/dnn.py`) are still the ones
-deepcell tuned for *its* TensorFlow weights. After training, search for better ones on
-the validation split:
+step's settings (`DEFAULT_POSTPROCESS_KWARGS` in `torch_dnn/dnn.py`) were tuned on the
+validation split for the weights trained on 2026-11-13 (deepcell's originals are kept as
+`TF_POSTPROCESS_KWARGS`). After training new weights, search for better ones:
 
 ```bash
 python -m torch_dnn.postprocess_sweep cache --model-path <weights.pth> --out data/sweep/cache_val

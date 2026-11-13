@@ -15,22 +15,34 @@ from torch_dnn.postprocess_utils import (
 # 1.1 config). Images at other resolutions are resized to it and the masks resized back.
 MODEL_MPP = 0.65
 
-# Post-processing defaults for ``DNN.predict``: deepcell's NuclearSegmentation 1.1 config
-# (deepcell/applications/nuclear_segmentation.py). That config also passes
-# ``min_distance=10``, a deprecated alias of ``radius`` with the same value, so it is
-# left out here (it would only raise a DeprecationWarning). Every other
-# ``deep_watershed`` setting keeps its default, as in deepcell: maxima_smooth=0,
-# interior_smooth=1, fill_holes_threshold=0, pixel_expansion=None, label_erosion=0,
-# maxima_algorithm='h_maxima' (so ``exclude_border`` has no effect). Head indices are
-# not listed here: ``dnn_postprocess`` takes them from
-# ``postprocess_utils.DNN_HEAD_INDICES``. These were tuned for the TF weights; after
-# training new weights, re-tune them with ``torch_dnn/postprocess_sweep.py``.
-DEFAULT_POSTPROCESS_KWARGS = {
+# deepcell's NuclearSegmentation 1.1 post-processing config
+# (deepcell/applications/nuclear_segmentation.py), tuned for deepcell's TF weights and
+# kept for reference. That config also passes ``min_distance=10``, a deprecated alias of
+# ``radius`` with the same value, so it is left out (it would only raise a
+# DeprecationWarning). Every other ``deep_watershed`` setting keeps its default, as in
+# deepcell: maxima_smooth=0, interior_smooth=1, fill_holes_threshold=0,
+# pixel_expansion=None, label_erosion=0, maxima_algorithm='h_maxima' (so
+# ``exclude_border`` has no effect). Head indices are not listed here:
+# ``dnn_postprocess`` takes them from ``postprocess_utils.DNN_HEAD_INDICES``.
+TF_POSTPROCESS_KWARGS = {
     'radius': 10,
     'maxima_threshold': 0.1,
     'interior_threshold': 0.01,
     'exclude_border': False,
     'small_objects_threshold': 0,
+}
+
+# Post-processing defaults for ``DNN.predict``: re-tuned on the validation split with
+# ``torch_dnn/postprocess_sweep.py`` for the torch weights trained 2026-11-13 (batch 32,
+# 16 epochs). Pooled F1 on validation: 0.9546 with ``TF_POSTPROCESS_KWARGS`` -> 0.9610,
+# better for every cell line. Settings within ~0.001 F1 of the best formed a broad
+# plateau (radius 2-4, maxima_threshold 0.15-0.25, interior_threshold 0.02-0.03); this
+# is its middle. Re-tune after training new weights.
+DEFAULT_POSTPROCESS_KWARGS = {
+    **TF_POSTPROCESS_KWARGS,
+    'radius': 3,
+    'maxima_threshold': 0.2,
+    'interior_threshold': 0.03,
 }
 
 # Where ``DNN()`` looks for weights when no ``model_path`` is given: the newest

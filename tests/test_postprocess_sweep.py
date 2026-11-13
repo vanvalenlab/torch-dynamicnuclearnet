@@ -88,12 +88,12 @@ def test_pool_counts_matches_metrics_summary(random_label_pairs):
 
 def test_expand_grid_fills_base_and_merges_duplicates():
     entries = [
-        {'label': 'grid', 'grid': {'interior_threshold': [0.01, 0.05]}},
-        {'label': 'ref', 'grid': {'interior_threshold': [0.01]}},
-        {'label': 'radius', 'grid': {'radius': [5, 10]}},
+        {'label': 'grid', 'grid': {'interior_threshold': [0.03, 0.05]}},
+        {'label': 'ref', 'grid': {'interior_threshold': [0.03]}},
+        {'label': 'radius', 'grid': {'radius': [3, 10]}},
     ]
     out = ps.expand_grid(entries)
-    assert len(out) == 3  # 0.01 and radius 10 are both the base setting
+    assert len(out) == 3  # interior 0.03 and radius 3 are both the base setting
     assert out[0][0] == ['grid', 'ref', 'radius']
     assert out[0][1] == ps.BASE_KWARGS
     assert all(set(kw) == set(ps.SWEEP_KEYS) for _, kw in out)

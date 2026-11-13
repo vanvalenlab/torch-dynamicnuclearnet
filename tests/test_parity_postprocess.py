@@ -17,7 +17,7 @@ import pytest
 import scipy.ndimage as nd
 
 from torch_dnn import postprocess_utils as pp
-from torch_dnn.dnn import DEFAULT_POSTPROCESS_KWARGS
+from torch_dnn.dnn import DEFAULT_POSTPROCESS_KWARGS, TF_POSTPROCESS_KWARGS
 
 from tests.conftest import random_blobs
 
@@ -266,15 +266,27 @@ def test_deep_watershed_matches(ref, fake_model_output, kwargs):
 
 
 def test_dnn_postprocess_matches_nuclear_segmentation(ref, fake_model_output):
-    """``dnn_postprocess`` at the app's defaults gives NuclearSegmentation's masks:
+    """``dnn_postprocess`` with deepcell's settings gives NuclearSegmentation's masks:
     ``deep_watershed([inner, outer], **CONFIGS['1.1'])`` on the prediction model's two
     outputs (min_distance=10 is a deprecated alias of radius=10)."""
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        port = pp.dnn_postprocess(fake_model_output, **DEFAULT_POSTPROCESS_KWARGS)
+        port = pp.dnn_postprocess(fake_model_output, **TF_POSTPROCESS_KWARGS)
         refv = ref.deep_watershed.deep_watershed(
             [cl(fake_model_output[:, 0:1]), cl(fake_model_output[:, 1:2])], **TF_NUCLEAR_SEGMENTATION_KWARGS)
     assert port.shape == (2, 1, 128, 128)
+    assert port.max() > 5
+    np.testing.assert_array_equal(cl(port), refv)
+
+
+def test_dnn_postprocess_at_app_defaults_matches_deep_watershed(ref, fake_model_output):
+    """The app's re-tuned defaults go through deepcell's own deep_watershed unchanged."""
+    kwargs = {k: v for k, v in DEFAULT_POSTPROCESS_KWARGS.items()}
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        port = pp.dnn_postprocess(fake_model_output, **kwargs)
+        refv = ref.deep_watershed.deep_watershed(
+            [cl(fake_model_output[:, 0:1]), cl(fake_model_output[:, 1:2])], **kwargs)
     assert port.max() > 5
     np.testing.assert_array_equal(cl(port), refv)
 

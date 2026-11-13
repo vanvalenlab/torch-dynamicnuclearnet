@@ -62,14 +62,14 @@ from torch_dnn.utils import fill_holes
 MODEL_CHANNELS = [DNN_HEAD_INDICES['maxima_index'], DNN_HEAD_INDICES['interior_index']]
 CACHE_MAXIMA, CACHE_INTERIOR = 0, 1
 
-# Settings a grid entry doesn't mention: deepcell's NuclearSegmentation 1.1 config
-# (``DNN.predict``'s defaults), with every other deep_watershed default written out.
+# Settings a grid entry doesn't mention: ``DNN.predict``'s defaults
+# (``DEFAULT_POSTPROCESS_KWARGS``), with every other deep_watershed default written out.
 BASE_KWARGS = {
-    'maxima_threshold': 0.1,
+    'maxima_threshold': 0.2,
     'maxima_smooth': 0,
-    'interior_threshold': 0.01,
+    'interior_threshold': 0.03,
     'interior_smooth': 1,
-    'radius': 10,
+    'radius': 3,
     'small_objects_threshold': 0,
     'fill_holes_threshold': 0,
     'pixel_expansion': 0,

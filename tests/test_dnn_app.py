@@ -18,7 +18,7 @@ import torch
 from torch import nn
 
 from torch_dnn import dnn as dnn_module
-from torch_dnn.dnn import DEFAULT_POSTPROCESS_KWARGS, DNN, MODEL_MPP, default_model_path
+from torch_dnn.dnn import DEFAULT_POSTPROCESS_KWARGS, DNN, MODEL_MPP, TF_POSTPROCESS_KWARGS, default_model_path
 from torch_dnn.model import DNN_MODEL_KWARGS, PanopticNet
 from torch_dnn.postprocess_utils import deep_watershed
 
@@ -64,10 +64,14 @@ def image():
 
 def test_model_mpp_and_defaults_match_nuclear_segmentation():
     """deepcell NuclearSegmentation 1.1: model_mpp 0.65, radius 10, maxima_threshold 0.1,
-    interior_threshold 0.01, exclude_border False, small_objects_threshold 0."""
+    interior_threshold 0.01, exclude_border False, small_objects_threshold 0 (kept as
+    TF_POSTPROCESS_KWARGS); the app's defaults are the re-tuned values."""
     assert MODEL_MPP == 0.65
-    assert DEFAULT_POSTPROCESS_KWARGS == {'radius': 10, 'maxima_threshold': 0.1, 'interior_threshold': 0.01,
-                                          'exclude_border': False, 'small_objects_threshold': 0}
+    assert TF_POSTPROCESS_KWARGS == {'radius': 10, 'maxima_threshold': 0.1, 'interior_threshold': 0.01,
+                                     'exclude_border': False, 'small_objects_threshold': 0}
+    # The app's defaults were re-tuned for the torch weights; only these three differ.
+    assert DEFAULT_POSTPROCESS_KWARGS == {**TF_POSTPROCESS_KWARGS, 'radius': 3, 'maxima_threshold': 0.2,
+                                          'interior_threshold': 0.03}
     assert inspect.signature(DNN.predict).parameters['pad_mode'].default == 'reflect'
 
 
@@ -153,8 +157,8 @@ def test_postprocess_kwargs_override_defaults(app, image, monkeypatch):
     monkeypatch.setattr(dnn_module, 'dnn_postprocess', spy)
     app.predict(image, image_mpp=MODEL_MPP, verbose=False)
     assert seen == {**DEFAULT_POSTPROCESS_KWARGS, 'progbar': False}
-    app.predict(image, image_mpp=MODEL_MPP, verbose=False, postprocess_kwargs={'radius': 3})
-    assert seen == {**DEFAULT_POSTPROCESS_KWARGS, 'radius': 3, 'progbar': False}
+    app.predict(image, image_mpp=MODEL_MPP, verbose=False, postprocess_kwargs={'radius': 5})
+    assert seen == {**DEFAULT_POSTPROCESS_KWARGS, 'radius': 5, 'progbar': False}
 
 
 def test_preprocess_kwargs_are_forwarded(app, image, monkeypatch):

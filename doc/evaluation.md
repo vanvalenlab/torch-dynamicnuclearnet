@@ -53,9 +53,18 @@ Each predicted nucleus is matched to a true one when they overlap enough. Then:
   predicted as one. **Many-to-many errors**: tangles of both.
 - **Jaccard index** and **SEG**: how well the matched outlines overlap (1 = perfect).
 
-For orientation: a model trained for only 2 epochs (a test run) scored F1 = 0.91 on the
-first 20 test images (all HeLa) with the default post-processing. Judge a real model on
-the whole split and look at each cell line, since they differ in difficulty.
+For orientation, the weights trained on 2026-11-13 (16 epochs, batch size 32) score these
+pooled F1 values on the whole test split with the default (re-tuned) post-processing:
+
+| All | 3T3 | HEK293 | HeLa | PC-3 | RAW264 | RPE |
+|---|---|---|---|---|---|---|
+| 0.959 | 0.987 | 0.963 | 0.928 | 0.969 | 0.955 | 0.985 |
+
+With deepcell's original settings (`TF_POSTPROCESS_KWARGS`) the same weights score 0.950
+overall. Most of HeLa's errors come from one movie, `HeLa-S3_nuc_pos16_q2_5c.trk` (test
+images 126–167): in its frames with a brighter, noisier background, the model marks
+patches of background as nuclei. Without that movie, HeLa scores 0.960. Look at each cell
+line, not only the overall score, since they differ in difficulty.
 
 ## Re-tuning the post-processing
 
@@ -66,18 +75,20 @@ high enough. The main settings are:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `maxima_threshold` | 0.1 | How prominent a peak must be to become a seed. Higher: fewer seeds (fewer splits, more merges). |
-| `radius` | 10 | Radius (pixels, at 0.65 µm/pixel) of the disk used to look for peaks; roughly, peaks closer than this merge into one seed. |
-| `interior_threshold` | 0.01 | Outer-distance value above which a pixel can belong to a nucleus. Higher: smaller masks, and dim nuclei can be lost. |
+| `maxima_threshold` | 0.2 | How prominent a peak must be to become a seed. Higher: fewer seeds (fewer splits, more merges). |
+| `radius` | 3 | Radius (pixels, at 0.65 µm/pixel) of the disk used to look for peaks; roughly, peaks closer than this merge into one seed. |
+| `interior_threshold` | 0.03 | Outer-distance value above which a pixel can belong to a nucleus. Higher: smaller masks, and dim nuclei can be lost. |
 | `maxima_smooth`, `interior_smooth` | 0, 1 | Gaussian smoothing of each map before use. |
 | `small_objects_threshold` | 0 | Remove masks smaller than this many pixels. |
 | `fill_holes_threshold` | 0 | Fill holes in masks smaller than this. |
 | `pixel_expansion` | none | Grow every mask by this many pixels. |
 
-The defaults (`DEFAULT_POSTPROCESS_KWARGS` in `torch_dnn/dnn.py`) are the ones deepcell
-chose for its TensorFlow model. A newly trained model's maps are similar but not
-identical, so after training **search for better settings on the validation split**
-(never on the test split, or the test score is no longer a fair estimate).
+The defaults (`DEFAULT_POSTPROCESS_KWARGS` in `torch_dnn/dnn.py`) were re-tuned this way
+for the weights trained on 2026-11-13; deepcell's values for its TensorFlow model (radius
+10, `maxima_threshold` 0.1, `interior_threshold` 0.01) are kept as `TF_POSTPROCESS_KWARGS`.
+A newly trained model's maps are similar but not identical, so after training new
+weights **search for better settings on the validation split** (never on the test split,
+or the test score is no longer a fair estimate).
 
 ### Step 1: run the network once
 
