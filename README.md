@@ -22,6 +22,12 @@ recipe in PyTorch, as closely as the two libraries allow. Its sibling,
 More detail: [doc/tutorial.md](doc/tutorial.md) (segmenting your own images),
 [doc/training.md](doc/training.md) and [doc/evaluation.md](doc/evaluation.md).
 
+Default model weights are downloaded from [Hugging Face](https://huggingface.co/vanvalenlab). Access is gated, but approved automatically. Create a Hugging Face account, then create a Read token exposed as `HF_TOKEN` in your environment.
+
+```bash
+export HF_TOKEN="<your-token-here>"
+```
+
 ## Installation
 
 Python 3.10 or newer. From a copy of this repository, inside a virtual environment:
